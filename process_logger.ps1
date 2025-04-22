@@ -12,6 +12,10 @@ foreach ($p in $processes) {
 
         $escapedName = $p.Name -replace "'", "''"
         $machine = $env:COMPUTERNAME
+        $privSecs = [math]::Round($p.PrivilegedProcessorTime.TotalSeconds, 3)
+        $userSecs = [math]::Round($p.UserProcessorTime.TotalSeconds, 3)
+        $totalSecs = [math]::Round($p.TotalProcessorTime.TotalSeconds, 3)
+        $affinity = $p.ProcessorAffinity.ToString() -replace "'", "''"
 
         $cmd.CommandText = @"
 INSERT INTO process_monitor (
@@ -22,7 +26,7 @@ INSERT INTO process_monitor (
 ) VALUES (
     '$escapedName', $($p.SI), $($p.WS), $($p.VM), $($p.PrivateMemorySize), $($p.WorkingSet),
     $($p.VirtualMemorySize), $($p.PagedMemorySize), $($p.PeakWorkingSet), $($p.PeakVirtualMemorySize), $($p.MaxWorkingSet), $($p.CPU),
-    '$($p.PrivilegedProcessorTime)', '$($p.UserProcessorTime)', '$($p.TotalProcessorTime)', '$($p.ProcessorAffinity)',
+    '$privSecs', '$userSecs', '$totalSecs', '$affinity',
     '$($p.StartTime)', $($p.HasExited), $($p.Responding), '$machine'
 )
 "@

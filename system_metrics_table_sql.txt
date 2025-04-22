@@ -1,0 +1,9 @@
+CREATE TABLE system_metrics (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP,
+    cpu_count INT,
+    total_physical_memory BIGINT,
+    total_net_sent BIGINT,
+    total_net_received BIGINT,
+    machine_name TEXT
+);
