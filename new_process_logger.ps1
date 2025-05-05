@@ -12,14 +12,14 @@ $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 $logDate = (Get-Date).ToString("yyyy-MM-dd")
 $machine = $env:COMPUTERNAME
 
-# Network stats
+# Network stats : still searching for a better way to collect this data
 $netSent = (Get-Counter '\Network Interface(*)\Bytes Sent/sec').CounterSamples | Measure-Object -Property CookedValue -Sum
 $netRecv = (Get-Counter '\Network Interface(*)\Bytes Received/sec').CounterSamples | Measure-Object -Property CookedValue -Sum
 
 $bytesSent = [math]::Round($netSent.Sum)
 $bytesRecv = [math]::Round($netRecv.Sum)
 
-# Memory stats
+# Memory stats : can be done on tableau are null 
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
 $totalMem = [math]::Round($os.TotalVisibleMemorySize / 1024, 2)   # in MB
 $freeMem = [math]::Round($os.FreePhysicalMemory / 1024, 2)
@@ -39,7 +39,7 @@ INSERT INTO system_metrics (
 "@
 $sysCmd.ExecuteNonQuery() | Out-Null
 
-# Per-process collection
+# Per-process collection : will be refined later
 $processes = Get-Process
 foreach ($p in $processes) {
     try {
