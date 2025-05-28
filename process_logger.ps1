@@ -19,7 +19,8 @@ $machine = $env:COMPUTERNAME
 # CPU INFO
 $cpuInfo = Get-CimInstance -ClassName Win32_Processor
 $cpuName = $cpuInfo.Name
-$cpuLoad = $cpuInfo.LoadPercentage
+$cpuLoad = (Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples[0].CookedValue
+$cpuLoad = [math]::Round($cpuLoad, 2)
 $cpuCores = $cpuInfo.NumberOfLogicalProcessors
 $maxClock = $cpuInfo.MaxClockSpeed
 $currentClock = $cpuInfo.CurrentClockSpeed
@@ -31,11 +32,30 @@ $freeMem = [math]::Round($os.FreePhysicalMemory / 1024, 2)
 $usedMem = [math]::Round($totalMem - $freeMem, 2)
 $memPercentUsed = [math]::Round(($usedMem / $totalMem) * 100, 2)
 
+# New system metrics
+$numProcesses = (Get-Process).Count
+$totalThreads = (Get-Process | ForEach-Object { $_.Threads.Count } | Measure-Object -Sum).Sum
+$totalHandles = (Get-Process | Measure-Object -Property Handles -Sum).Sum
+
+$lastBootTime = (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+$uptime = (New-TimeSpan -Start $lastBootTime -End (Get-Date))
+$uptimeSeconds = [math]::Round($uptime.TotalSeconds)
+
 # NETWORK
 $netSent = (Get-Counter '\Network Interface(*)\Bytes Sent/sec').CounterSamples | Measure-Object -Property CookedValue -Sum
 $netRecv = (Get-Counter '\Network Interface(*)\Bytes Received/sec').CounterSamples | Measure-Object -Property CookedValue -Sum
 $bytesSent = [math]::Round($netSent.Sum)
 $bytesRecv = [math]::Round($netRecv.Sum)
+# Run netsh and capture output
+$wifiInfo = netsh wlan show interfaces
+
+# Extract signal strength (percent)
+$wifiSignal = ($wifiInfo | Where-Object { $_ -match "^\s*Signal\s*:\s*\d+" }) -replace "^\s*Signal\s*:\s*", "" -replace "%", ""
+$wifiSignal = [int]($wifiSignal | Select-Object -First 1)
+
+# Extract link speed (Receive rate in Mbps)
+$linkSpeed = ($wifiInfo | Where-Object { $_ -match "^\s*Receive rate\s*:\s*\d+" }) -replace "^\s*Receive rate\s*:\s*", ""
+$linkSpeedMbps = [int]($linkSpeed | Select-Object -First 1)
 
 # INSERT SYSTEM METRICS
 $sysCmd = $connection.CreateCommand()
@@ -44,17 +64,21 @@ INSERT INTO system_metrics (
     timestamp, log_date, cpu_count, total_physical_memory,
     total_net_sent, total_net_received,
     total_memory_mb, free_memory_mb, used_memory_mb, ram_percent_used,
-    machine_name, cpu_name, cpu_load, max_clock_mhz, current_clock_mhz
+    machine_name, cpu_name, cpu_load, max_clock_mhz, current_clock_mhz, 
+    process_count, thread_count, handle_count, system_uptime_seconds, signal_strength,
+    link_speed_mbps
 ) VALUES (
     '$timestamp', '$logDate', $cpuCores, $($os.TotalVisibleMemorySize * 1024),
     $bytesSent, $bytesRecv,
     $totalMem, $freeMem, $usedMem, $memPercentUsed,
-    '$machine', '$cpuName', $cpuLoad, $maxClock, $currentClock
+    '$machine', '$cpuName', $cpuLoad, $maxClock, $currentClock, $numProcesses,
+    $totalThreads, $totalHandles, $uptimeSeconds, $wifiSignal, $linkSpeedMbps
 )
 "@
+
 $sysCmd.ExecuteNonQuery() | Out-Null
 
-# COLLECT PROCESS METRICS
+# COLLECT PROCESS METRICS 
 $processes = Get-Process | Where-Object {
     $_.Name -notin $excludedProcesses -and
     $_.CPU -gt 0 -and
