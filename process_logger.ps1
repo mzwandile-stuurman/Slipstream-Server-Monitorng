@@ -16,6 +16,17 @@ $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
 $logDate = (Get-Date).ToString("yyyy-MM-dd")
 $machine = $env:COMPUTERNAME
 
+# CSV Paths
+$systemMetricsCsv = "C:\Metrics\system_metrics_$logDate.csv"
+$processMetricsCsv = "C:\Metrics\process_metrics_$logDate.csv"
+
+# Ensure the directory exists
+$csvDir = [System.IO.Path]::GetDirectoryName($systemMetricsCsv)
+if (-not (Test-Path $csvDir)) {
+    New-Item -Path $csvDir -ItemType Directory | Out-Null
+}
+
+
 # CPU INFO
 $cpuInfo = Get-CimInstance -ClassName Win32_Processor
 $cpuName = $cpuInfo.Name
@@ -94,6 +105,37 @@ INSERT INTO system_metrics (
 
 $sysCmd.ExecuteNonQuery() | Out-Null
 
+# Save system metrics to CSV
+$systemMetrics = [PSCustomObject]@{
+    timestamp            = $timestamp
+    log_date             = $logDate
+    cpu_count            = $cpuCores
+    total_physical_memory = $os.TotalVisibleMemorySize * 1024
+    total_net_sent       = $bytesSent
+    total_net_received   = $bytesRecv
+    total_memory_mb      = $totalMem
+    free_memory_mb       = $freeMem
+    used_memory_mb       = $usedMem
+    ram_percent_used     = $memPercentUsed
+    machine_name         = $machine
+    cpu_name             = $cpuName
+    cpu_load             = $cpuLoad
+    max_clock_mhz        = $maxClock
+    current_clock_mhz    = $currentClock
+    process_count        = $numProcesses
+    thread_count         = $totalThreads
+    handle_count         = $totalHandles
+    system_uptime_seconds = $uptimeSeconds
+    signal_strength      = $wifiSignal
+    link_speed_mbps      = $linkSpeedMbps
+    disk_total_gb        = $totalDiskGB
+    disk_used_gb         = $usedDiskGB
+    disk_free_gb         = $totalFreeGB
+}
+
+$systemMetrics | Export-Csv -Path $systemMetricsCsv -Append -NoTypeInformation
+
+
 # COLLECT PROCESS METRICS (Cleaned version)
 $processes = Get-Process | Where-Object {
     $_.Name -notin $excludedProcesses -and
@@ -101,13 +143,34 @@ $processes = Get-Process | Where-Object {
     $_.WorkingSet -gt 1MB
 }
 
+# Get CPU per 1 second interval
+$initialTimes = @{}
+Get-Process | ForEach-Object {
+    $initialTimes[$_.Id] = $_.TotalProcessorTime.TotalMilliseconds
+}
+Start-Sleep -Milliseconds 1000  # 1 second sample interval
+
+$finalTimes = @{}
+Get-Process | ForEach-Object {
+    $finalTimes[$_.Id] = $_.TotalProcessorTime.TotalMilliseconds
+}
+
+$cpuCount = (Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors
+
+
 foreach ($p in $processes) {
     try {
         $cmd = $connection.CreateCommand()
         
+        if ($finalTimes.ContainsKey($p.Id) -and $initialTimes.ContainsKey($p.Id)) {
+        $delta = $finalTimes[$p.Id] - $initialTimes[$p.Id]
+        $TotcpuPercent = [math]::Round(($delta / (1000 * $cpuCount)) * 100, 2)
+        } else {
+            $TotcpuPercent = 0
+        }
         $escapedName = $p.Name -replace "'", "''"
         $workingSet = $p.WorkingSet
-        $cpu = if ($p.CPU) { $p.CPU } else { 0 }
+        #$cpu = if ($p.CPU) { $p.CPU } else { 0 }
         $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         $logDate = (Get-Date).ToString("yyyy-MM-dd")
         
@@ -125,12 +188,26 @@ INSERT INTO process_monitor (
     name, working_set, cpu,
     timestamp, log_date, cpu_percent
 ) VALUES (
-    '$escapedName', $workingSet, $cpu,
+    '$escapedName', $workingSet, $TotcpuPercent,
     '$timestamp', '$logDate',  $cpuPercent
 )
 "@
-        $cmd.ExecuteNonQuery() | Out-Null
-        Write-Host "Inserted: $escapedName"
+
+    # Append process metric to CSV
+    $procMetrics = [PSCustomObject]@{
+        name         = $p.Name
+        working_set  = $workingSet
+        cpu          = $TotcpuPercent
+        timestamp    = $timestamp
+        log_date     = $logDate
+        cpu_percent  = $cpuPercent
+    }
+
+    $procMetrics | Export-Csv -Path $processMetricsCsv -Append -NoTypeInformation
+
+
+    $cmd.ExecuteNonQuery() | Out-Null
+    Write-Host "Inserted: $escapedName"
     } catch {
         Write-Host "Error inserting $($p.Name): $($_.Exception.Message)"
     }
