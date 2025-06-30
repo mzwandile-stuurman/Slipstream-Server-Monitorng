@@ -1,10 +1,26 @@
 Add-Type -AssemblyName System.Data
-
 #Set intervals
 $intervalSeconds = 1  # 1 second
 $runIndefinitely = $true
+$startTime = Get-Date
+
 while ($runIndefinitely) {
     try {
+
+        # Check if 1 hour has passed since logging started
+       
+        $elapsed = (Get-Date) - $startTime
+        if ($elapsed.TotalMinutes -ge 30) {
+           #Write-Host "20 minutes passed — deleting old CSV files..."
+
+            # Delete old files
+            if (Test-Path $systemMetricsCsv) { Remove-Item $systemMetricsCsv -Force }
+            if (Test-Path $processMetricsCsv) { Remove-Item $processMetricsCsv -Force }
+
+            # Reset start time for next cycle
+            $startTime = Get-Date
+        }
+
 
         # Excluding background data
         $excludedProcesses = @(
@@ -43,6 +59,7 @@ while ($runIndefinitely) {
         $usedMem = [math]::Round($totalMem - $freeMem, 2)
         $memPercentUsed = [math]::Round(($usedMem / $totalMem) * 100, 2)
 
+        
         # New system metrics
         $numProcesses = (Get-Process).Count
         $totalThreads = (Get-Process | ForEach-Object { $_.Threads.Count } | Measure-Object -Sum).Sum
@@ -125,17 +142,36 @@ while ($runIndefinitely) {
         Get-Process | ForEach-Object {
             $initialTimes[$_.Id] = $_.TotalProcessorTime.TotalMilliseconds
         }
-        Start-Sleep -Milliseconds 1000  # 1 second sample interval
 
+        # Initial I/O operations snapshot
+        $initialIO = @{}
+        Get-Process | ForEach-Object {
+            $initialIO[$_.Id] = @{
+                ReadOps  = $_.IOReadOperations
+                WriteOps = $_.IOWriteOperations
+            }
+        }
+
+        Start-Sleep -Milliseconds 1000  # 1 second sample interval
         $finalTimes = @{}
         Get-Process | ForEach-Object {
             $finalTimes[$_.Id] = $_.TotalProcessorTime.TotalMilliseconds
+        }
+
+        # Final I/O operations snapshot
+        $finalIO = @{}
+        Get-Process | ForEach-Object {
+            $finalIO[$_.Id] = @{
+                ReadOps  = $_.IOReadOperations
+                WriteOps = $_.IOWriteOperations
+            }
         }
 
         $cpuCount = (Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors
         
         foreach ($p in $processes) {
             try {
+
                 #Cpu per second metric
                 if ($finalTimes.ContainsKey($p.Id) -and $initialTimes.ContainsKey($p.Id)) {
                     $delta = $finalTimes[$p.Id] - $initialTimes[$p.Id]
@@ -143,6 +179,18 @@ while ($runIndefinitely) {
                 } else {
                     $TotcpuPercent = 0
                 }
+
+                # Calculate per-second I/O operations
+                if ($initialIO.ContainsKey($p.Id) -and $finalIO.ContainsKey($p.Id)) {
+                    $readDelta  = $finalIO[$p.Id].ReadOps  - $initialIO[$p.Id].ReadOps
+                    $writeDelta = $finalIO[$p.Id].WriteOps - $initialIO[$p.Id].WriteOps
+                    $totalIODelta = $readDelta + $writeDelta
+                } else {
+                    $readDelta = 0
+                    $writeDelta = 0
+                    $totalIODelta = 0
+                }
+
                 $workingSet = $p.WorkingSet
                 # Append process metric to CSV
                 
@@ -150,18 +198,22 @@ while ($runIndefinitely) {
                     name         = $p.Name
                     ram          = $workingSet
                     cpu          = $TotcpuPercent
+                    io_read_ops  = $readDelta
+                    io_write_ops = $writeDelta
+                    io_total_ops = $totalIODelta
                     timestamp    = $timestamp
                     log_date     = $logDate
                     
                 }
 
                 $procMetrics | Export-Csv -Path $processMetricsCsv -Append -NoTypeInformation
-            } catch {
+            } 
+            catch {
                 Write-Host "Error inserting $($p.Name): $($_.Exception.Message)"
             }
         }
         
-        Write-Host "Sleeping for $intervalSeconds seconds..."
+        Write-Host " running for $intervalSeconds second(s)..."
         Start-Sleep -Seconds $intervalSeconds
     }
     catch {
